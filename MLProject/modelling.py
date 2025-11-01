@@ -1,60 +1,57 @@
-import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 import mlflow
 import mlflow.sklearn
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import classification_report, accuracy_score
+import pandas as pd
+import os
 
-def load_data(file_path="Preprocessed_Dry_Bean.csv"):
-    """Memuat dataset Dry Bean yang sudah diproses sebelumnya."""
+def load_data(file_path):
     df = pd.read_csv(file_path)
-    X = df.drop(['Class'], axis=1)
-    y = df['Class']
+    X = df.drop("Class", axis=1)
+    y = df["Class"]
     return X, y
 
-def train_and_log_model(X_train, X_test, y_train, y_test, n_neighbors):
-    """Melatih model KNN dan menggunakan MLflow autologging."""
+def train_and_log_model(X_train, X_test, y_train, y_test, n_neighbors=5):
+    model = KNeighborsClassifier(n_neighbors=n_neighbors)
 
-    # Aktifkan autologging untuk scikit-learn
-    mlflow.sklearn.autolog()
+    # Gunakan run aktif jika ada, kalau tidak buat run baru
+    active_run = mlflow.active_run()
+    if active_run is None:
+        run_context = mlflow.start_run(run_name="KNN-DryBean")
+    else:
+        run_context = mlflow.start_run(run_name="KNN-DryBean", nested=True)
 
-    # Buat atau pilih experiment
+    with run_context:
+        mlflow.sklearn.autolog(log_models=True)
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
+
+        acc = accuracy_score(y_test, y_pred)
+        print(f"✅ Model dilatih, akurasi: {acc:.4f}")
+
+        mlflow.log_metric("accuracy", acc)
+
+        report = classification_report(y_test, y_pred, output_dict=True)
+        report_path = "classification_report.csv"
+        pd.DataFrame(report).transpose().to_csv(report_path)
+        mlflow.log_artifact(report_path)
+
+        mlflow.sklearn.log_model(model, "model")
+
+        print("📦 Model dan metrik berhasil dicatat di MLflow")
+
+def main():
+    mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000"))
     mlflow.set_experiment("Dry_Bean_Classification_KNN_Autolog")
 
-    # Jalankan run MLflow
-    with mlflow.start_run() as run:
-        knn = KNeighborsClassifier(n_neighbors=n_neighbors)
-        knn.fit(X_train, y_train)
-        y_pred = knn.predict(X_test)
-
-        # Hitung metrik (ditampilkan saja, tidak di-log manual)
-        accuracy = accuracy_score(y_test, y_pred)
-        precision = precision_score(y_test, y_pred, average='weighted', zero_division=0)
-        recall = recall_score(y_test, y_pred, average='weighted', zero_division=0)
-        f1 = f1_score(y_test, y_pred, average='weighted', zero_division=0)
-
-        print("\n=== HASIL EVALUASI MODEL ===")
-        print(f"MLflow Run ID : {run.info.run_id}")
-        print(f"Akurasi       : {accuracy:.4f}")
-        print(f"Presisi       : {precision:.4f}")
-        print(f"Recall        : {recall:.4f}")
-        print(f"F1 Score      : {f1:.4f}")
-        print("============================\n")
-
-# Pastikan script ini bisa langsung dijalankan
-if __name__ == "__main__":
-    # Load data
-    X, y = load_data()
-
-    # Split data train-test
+    X, y = load_data("Preprocessed_Dry_Bean.csv")
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
+        X, y, test_size=0.2, random_state=42, stratify=y
     )
 
-    # Jalankan training + autolog
-    train_and_log_model(X_train, X_test, y_train, y_test, n_neighbors=5)
+    train_and_log_model(X_train, X_test, y_train, y_test)
 
-    print("Training selesai")
-    print("Jalankan perintah berikut untuk melihat hasil di MLflow UI:")
-    print("mlflow ui")
-    print("Lalu buka browser ke: http://localhost:5000")
+if __name__ == "__main__":
+    main()
