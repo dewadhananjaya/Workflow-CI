@@ -1,0 +1,93 @@
+name: MLProject
+
+on:
+  workflow_dispatch:  # Bisa dijalankan manual dari tab Actions
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ========================
+      # 1️⃣ Checkout repository
+      # ========================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ========================
+      # 2️⃣ Setup Miniconda
+      # ========================
+      - name: Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: dry-bean-mlflow-env
+          environment-file: MLProject/conda.yaml
+          auto-activate-base: false
+
+      # ========================
+      # 3️⃣ Jalankan server MLflow (background)
+      # ========================
+      - name: Start MLflow server
+        shell: bash -l {0}
+        run: |
+          echo "🚀 Menjalankan server MLflow di background..."
+          conda activate dry-bean-mlflow-env
+          
+          # Pastikan mlflow terinstal
+          pip install mlflow --quiet
+          # Pilih port acak agar tidak bentrok
+          PORT=$((5000 + RANDOM % 1000))
+          echo "Port yang digunakan: $PORT"
+          # Jalankan MLflow server di background
+          nohup $(which mlflow) server \
+            --backend-store-uri sqlite:///mlflow.db \
+            --default-artifact-root ./artifacts \
+            --host 127.0.0.1 \
+            --port $PORT > mlflow_server.log 2>&1 &
+          # Tunggu server siap
+          echo "⏳ Menunggu server siap..."
+          for i in {1..10}; do
+            if curl -s "http://127.0.0.1:$PORT/api/2.0/mlflow/experiments/list" > /dev/null; then
+              echo "✅ MLflow server siap di http://127.0.0.1:$PORT"
+              echo "MLFLOW_TRACKING_URI=http://127.0.0.1:$PORT" >> $GITHUB_ENV
+              break
+            fi
+            echo "Menunggu server ($i/10)..."
+            sleep 3
+          done
+          # Cek kalau server tetap gagal
+          if ! curl -s "http://127.0.0.1:$PORT/api/2.0/mlflow/experiments/list" > /dev/null; then
+            echo "❌ Server MLflow gagal dijalankan!"
+            cat mlflow_server.log
+            exit 1
+          fi
+      # ========================
+      # 4️⃣ Jalankan MLflow Project
+      # ========================
+      - name: Jalankan MLflow Project
+        working-directory: ./MLProject
+        shell: bash -l {0}
+        run: |
+          echo "🚀 Menjalankan proyek MLflow..."
+          echo "Tracking URI: $MLFLOW_TRACKING_URI"
+          
+          conda activate dry-bean-mlflow-env
+          mlflow run . --env-manager=local || { echo "❌ Training dengan MLflow gagal"; exit 1; }
+          echo "🔍 Mencari Run ID terbaru..."
+          LATEST_RUN=$(find mlruns -mindepth 2 -maxdepth 2 -type d | sort -r | head -n 1)
+          echo "Run terbaru: $LATEST_RUN"
+          if [ -z "$LATEST_RUN" ]; then
+            echo "❌ Tidak ditemukan run MLflow!"
+            exit 1
+          fi
+          RUN_ID=$(basename "$LATEST_RUN")
+          echo "Run ID: $RUN_ID"
+          echo "mlflow_run_id=$RUN_ID" >> $GITHUB_OUTPUT
+      # ========================
+      # 5️⃣ Upload Artifacts
+      # ========================
+      - name: Upload MLflow Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlflow-artifacts
+          path: MLProject/mlruns
