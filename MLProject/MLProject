@@ -1,0 +1,9 @@
+name: dry-bean-mlflow
+
+conda_env: conda.yaml
+
+entry_points:
+  main:
+    parameters:
+      data_path: {type: str, default: "Preprocessed_Dry_Bean.csv"}
+    command: "python modelling.py --data_path {data_path}"
